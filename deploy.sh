@@ -5,7 +5,7 @@ REPO_DIR="/home/raspi/fogscreen-server"
 WEB_DIR="/var/www/html"
 
 # Switch to client mode to reach GitHub
-~/toggle-wifi.sh 0
+~/toggle-wifi.sh 0 || true
 
 # Clone if not already present, otherwise pull
 if [ ! -d "$REPO_DIR/.git" ]; then

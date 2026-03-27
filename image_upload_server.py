@@ -33,8 +33,10 @@ try:
     GPIO.setmode(GPIO.BCM)
     GPIO.setup(17, GPIO.OUT, initial=GPIO.HIGH)
     GPIO_AVAILABLE = True
+    print("GPIO initialized OK", flush=True)
 except ImportError:
     GPIO_AVAILABLE = False
+    print("GPIO NOT available", flush=True)
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 HOST = "0.0.0.0"
