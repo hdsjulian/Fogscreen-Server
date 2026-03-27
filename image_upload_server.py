@@ -247,6 +247,9 @@ async def relay_toggle():
     relay_state = not relay_state
     if GPIO_AVAILABLE:
         GPIO.output(17, GPIO.LOW if relay_state else GPIO.HIGH)
+        print(f"GPIO 17 set to {'LOW (on)' if relay_state else 'HIGH (off)'}", flush=True)
+    else:
+        print("GPIO not available, skipping relay", flush=True)
     return JSONResponse(content={"relay": "on" if relay_state else "off"})
 
 
