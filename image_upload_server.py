@@ -34,9 +34,9 @@ try:
     GPIO.setup(17, GPIO.OUT, initial=GPIO.HIGH)
     GPIO_AVAILABLE = True
     print("GPIO initialized OK", flush=True)
-except ImportError:
+except Exception as e:
     GPIO_AVAILABLE = False
-    print("GPIO NOT available", flush=True)
+    print(f"GPIO NOT available: {e}", flush=True)
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 HOST = "0.0.0.0"
