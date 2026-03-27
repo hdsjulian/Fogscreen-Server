@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fogscreen</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #000;
+            color: #fff;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem;
+        }
+        .container {
+            max-width: 400px;
+            text-align: center;
+        }
+        h1 { font-size: 2.5rem; font-weight: 700; margin-bottom: 0.5rem; }
+        .subtitle { color: #aaa; margin-bottom: 3rem; font-size: 1rem; }
+        .step {
+            background: #111;
+            border-radius: 16px;
+            padding: 1.5rem;
+            margin-bottom: 1rem;
+            text-align: left;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+        .step-number {
+            background: #fff;
+            color: #000;
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            flex-shrink: 0;
+        }
+        .step-text { font-size: 1rem; line-height: 1.4; }
+        .app-button {
+            display: inline-block;
+            margin-top: 2rem;
+            background: #fff;
+            color: #000;
+            padding: 1rem 2rem;
+            border-radius: 50px;
+            font-weight: 600;
+            font-size: 1rem;
+            text-decoration: none;
+        }
+        .power-button {
+            margin-top: 1.5rem;
+            background: #111;
+            color: #fff;
+            border: 1px solid #333;
+            padding: 1rem 2rem;
+            border-radius: 50px;
+            font-weight: 600;
+            font-size: 1rem;
+            cursor: pointer;
+            display: inline-block;
+        }
+        .power-button.on {
+            border-color: #4ade80;
+            color: #4ade80;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Fogscreen</h1>
+        <p class="subtitle">Follow the steps below to get started</p>
+        <div class="step">
+            <div class="step-number">1</div>
+            <div class="step-text">Download the <strong>Fogscreen</strong> app from the App Store</div>
+        </div>
+        <div class="step">
+            <div class="step-number">2</div>
+            <div class="step-text">Open the app and select a photo from your library</div>
+        </div>
+        <div class="step">
+            <div class="step-number">3</div>
+            <div class="step-text">Upload your photo and watch it appear on the screen</div>
+        </div>
+        <a class="app-button" href="#">Download on the App Store</a>
+        <br>
+        <button class="power-button" id="powerBtn" onclick="toggleRelay()">Turn On</button>
+    </div>
+    <script>
+        let relayOn = false;
+
+        function updateButton(state) {
+            const btn = document.getElementById('powerBtn');
+            relayOn = state === 'on';
+            btn.textContent = relayOn ? 'Turn Off' : 'Turn On';
+            btn.classList.toggle('on', relayOn);
+        }
+
+        async function fetchStatus() {
+            const res = await fetch('/relay/status');
+            const data = await res.json();
+            updateButton(data.relay);
+        }
+
+        async function toggleRelay() {
+            const res = await fetch('/relay/toggle', { method: 'POST' });
+            const data = await res.json();
+            updateButton(data.relay);
+        }
+
+        fetchStatus();
+    </script>
+</body>
+</html>

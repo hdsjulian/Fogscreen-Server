@@ -25,7 +25,16 @@ from pathlib import Path
 import uvicorn
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
+
+try:
+    import RPi.GPIO as GPIO
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setup(17, GPIO.OUT, initial=GPIO.LOW)
+    GPIO_AVAILABLE = True
+except ImportError:
+    GPIO_AVAILABLE = False
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 HOST = "0.0.0.0"
@@ -57,9 +66,16 @@ DMX_UNIVERSE_SIZE = 512              # standard DMX universe
 # ──────────────────────────────────────────────────────────────────────────────
 
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 display_lock = threading.Lock()
 current_proc: subprocess.Popen | None = None
+relay_state = False  # False = off, True = on
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -214,6 +230,22 @@ async def upload(file: UploadFile = File(...)):
         status_code=200,
         content={"message": "Image received, display and fog machine activated."},
     )
+
+
+@app.get("/relay/status")
+async def relay_status():
+    """Return the current relay state."""
+    return JSONResponse(content={"relay": "on" if relay_state else "off"})
+
+
+@app.post("/relay/toggle")
+async def relay_toggle():
+    """Toggle the relay on GPIO 17."""
+    global relay_state
+    relay_state = not relay_state
+    if GPIO_AVAILABLE:
+        GPIO.output(17, GPIO.HIGH if relay_state else GPIO.LOW)
+    return JSONResponse(content={"relay": "on" if relay_state else "off"})
 
 
 if __name__ == "__main__":
