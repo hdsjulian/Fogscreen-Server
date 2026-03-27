@@ -31,7 +31,7 @@ from PIL import Image
 try:
     import RPi.GPIO as GPIO
     GPIO.setmode(GPIO.BCM)
-    GPIO.setup(17, GPIO.OUT, initial=GPIO.LOW)
+    GPIO.setup(17, GPIO.OUT, initial=GPIO.HIGH)
     GPIO_AVAILABLE = True
 except ImportError:
     GPIO_AVAILABLE = False
@@ -244,7 +244,7 @@ async def relay_toggle():
     global relay_state
     relay_state = not relay_state
     if GPIO_AVAILABLE:
-        GPIO.output(17, GPIO.HIGH if relay_state else GPIO.LOW)
+        GPIO.output(17, GPIO.LOW if relay_state else GPIO.HIGH)
     return JSONResponse(content={"relay": "on" if relay_state else "off"})
 
 

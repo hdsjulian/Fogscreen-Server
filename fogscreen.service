@@ -1,0 +1,12 @@
+[Unit]
+Description=Fogscreen Server
+After=network.target
+
+[Service]
+User=raspi
+WorkingDirectory=/home/raspi/fogscreen-server
+ExecStart=/home/raspi/venv/bin/python3 image_upload_server.py
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

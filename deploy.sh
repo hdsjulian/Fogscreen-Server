@@ -14,4 +14,7 @@ fi
 # Deploy HTML to nginx webroot
 sudo cp "$REPO_DIR/index.html" "$WEB_DIR/index.html"
 
+# Restart the FastAPI service
+sudo systemctl restart fogscreen
+
 echo "Done."
