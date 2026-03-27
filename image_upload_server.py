@@ -31,7 +31,7 @@ from PIL import Image
 try:
     import RPi.GPIO as GPIO
     GPIO.setmode(GPIO.BCM)
-    GPIO.setup(17, GPIO.OUT, initial=GPIO.HIGH)
+    GPIO.setup(17, GPIO.OUT, initial=GPIO.LOW)
     GPIO_AVAILABLE = True
     print("GPIO initialized OK", flush=True)
 except Exception as e:
