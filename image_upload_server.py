@@ -12,6 +12,7 @@ triggered at full output and then switched off when the display clears.
 Requires: pip install fastapi uvicorn pillow pyserial
 """
 
+import fcntl
 import io
 import os
 import serial
@@ -21,6 +22,9 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+
+TIOCSBRK = 0x2000747B  # macOS
+TIOCCBRK = 0x2000747A  # macOS
 
 import uvicorn
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -60,7 +64,7 @@ DMX_BAUD = 250_000                   # DMX512 baud rate (do not change)
 
 # DMX channel layout for your fog machine.
 # Adjust channel numbers (1-based) and values to match your fixture's manual.
-FOG_DMX_CHANNEL = 1                  # DMX channel that controls the fog output
+FOG_DMX_CHANNEL = 248                # DMX channel that controls the fog output
 FOG_ON_VALUE    = 255                # 0-255 – full fog
 FOG_OFF_VALUE   = 0                  # 0     – fog off
 
@@ -136,22 +140,25 @@ def _build_dmx_frame(channel: int, value: int) -> bytes:
     return bytes(frame)
 
 
-def _send_dmx(value: int) -> None:
-    """Open the DMX serial port, send one frame, then close."""
+def _send_dmx(value: int, duration: float = 0.5) -> None:
+    """Send continuous DMX frames for `duration` seconds."""
     port = DMX_PORT or _find_dmx_port()
     if port is None:
-        print("[DMX] WARNING: No USB-DMX adapter found. Skipping fog control.")
+        print("[DMX] WARNING: No USB-DMX adapter found. Skipping fog control.", flush=True)
         return
     try:
-        # serial_for_url with 'break_condition' is not universally supported;
-        # use a raw Serial with manual BREAK signalling instead.
         with serial.Serial(port, baudrate=DMX_BAUD, stopbits=2, timeout=1) as ser:
-            # Send BREAK (≥88 µs low) + MAB (≥8 µs high) via serial break signal
-            ser.send_break(duration=0.0001)   # 100 µs – well within spec
-            time.sleep(0.000012)              # MAB: 12 µs
-            ser.write(_build_dmx_frame(FOG_DMX_CHANNEL, value))
+            end = time.time() + duration
+            while time.time() < end:
+                fcntl.ioctl(ser.fd, TIOCSBRK)
+                time.sleep(0.001)
+                fcntl.ioctl(ser.fd, TIOCCBRK)
+                time.sleep(0.00002)
+                ser.write(_build_dmx_frame(FOG_DMX_CHANNEL, value))
+                ser.flush()
+                time.sleep(0.023)
     except serial.SerialException as exc:
-        print(f"[DMX] Serial error: {exc}")
+        print(f"[DMX] Serial error: {exc}", flush=True)
 
 
 def fog_on() -> None:
