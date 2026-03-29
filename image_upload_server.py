@@ -234,6 +234,28 @@ async def upload(file: UploadFile = File(...)):
     )
 
 
+fog_state = False  # False = off, True = on
+
+
+@app.post("/fog/toggle")
+async def fog_toggle():
+    """Toggle the fog machine on or off."""
+    global fog_state
+    fog_state = not fog_state
+    if fog_state:
+        fog_on()
+        print("Fog ON", flush=True)
+    else:
+        fog_off()
+        print("Fog OFF", flush=True)
+    return JSONResponse(content={"fog": "on" if fog_state else "off"})
+
+
+@app.get("/fog/status")
+async def fog_status():
+    return JSONResponse(content={"fog": "on" if fog_state else "off"})
+
+
 @app.get("/relay/status")
 async def relay_status():
     """Return the current relay state."""

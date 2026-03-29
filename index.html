@@ -93,27 +93,43 @@
         <a class="app-button" href="#">Download on the App Store</a>
         <br>
         <button class="power-button" id="powerBtn" onclick="toggleRelay()">Turn On</button>
+        <button class="power-button" id="fogBtn" onclick="toggleFog()">Fog On</button>
     </div>
     <script>
         let relayOn = false;
+        let fogOn = false;
 
-        function updateButton(state) {
+        function updateRelayButton(state) {
             const btn = document.getElementById('powerBtn');
             relayOn = state === 'on';
-            btn.textContent = relayOn ? 'Turn Off' : 'Turn On';
+            btn.textContent = relayOn ? 'Turn On' : 'Turn Off';
             btn.classList.toggle('on', relayOn);
         }
 
+        function updateFogButton(state) {
+            const btn = document.getElementById('fogBtn');
+            fogOn = state === 'on';
+            btn.textContent = fogOn ? 'Fog Off' : 'Fog On';
+            btn.classList.toggle('on', fogOn);
+        }
+
         async function fetchStatus() {
-            const res = await fetch('/relay/status');
-            const data = await res.json();
-            updateButton(data.relay);
+            const [relayRes, fogRes] = await Promise.all([
+                fetch('/relay/status'),
+                fetch('/fog/status'),
+            ]);
+            updateRelayButton((await relayRes.json()).relay);
+            updateFogButton((await fogRes.json()).fog);
         }
 
         async function toggleRelay() {
             const res = await fetch('/relay/toggle', { method: 'POST' });
-            const data = await res.json();
-            updateButton(data.relay);
+            updateRelayButton((await res.json()).relay);
+        }
+
+        async function toggleFog() {
+            const res = await fetch('/fog/toggle', { method: 'POST' });
+            updateFogButton((await res.json()).fog);
         }
 
         fetchStatus();
