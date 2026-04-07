@@ -1,0 +1,12 @@
+[Unit]
+Description=Minimal X session
+After=network.target
+
+[Service]
+User=raspi
+Environment=DISPLAY=:0
+ExecStart=/usr/bin/startx /usr/bin/feh --fullscreen --auto-zoom --borderless /home/raspi/black.png
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

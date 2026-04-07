@@ -21,6 +21,12 @@ sudo cp "$REPO_DIR/index.html" "$WEB_DIR/index.html"
 sudo cp "$REPO_DIR/nginx.conf" /etc/nginx/sites-enabled/default
 sudo nginx -t && sudo systemctl reload nginx
 
+# Deploy xorg service
+sudo cp "$REPO_DIR/xorg.service" /etc/systemd/system/xorg.service
+sudo systemctl daemon-reload
+sudo systemctl enable xorg
+sudo systemctl restart xorg
+
 # Restart the FastAPI service
 sudo systemctl restart fogscreen
 
