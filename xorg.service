@@ -8,7 +8,7 @@ PAMName=login
 Environment=DISPLAY=:0
 TTYPath=/dev/tty1
 StandardInput=tty
-ExecStart=/usr/bin/startx /bin/bash -c "while true; do /usr/bin/feh --fullscreen --auto-zoom --borderless /home/raspi/black.png; done" -- :0 vt1
+ExecStart=/usr/bin/startx /home/raspi/fogscreen-server/start-display.sh -- :0 vt1
 Restart=on-failure
 
 [Install]

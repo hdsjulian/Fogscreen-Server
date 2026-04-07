@@ -25,6 +25,8 @@ sudo nginx -t && sudo systemctl start nginx
 # Allow any user to run X
 echo -e "allowed_users=anybody\nneeds_root_rights=yes" | sudo tee /etc/X11/Xwrapper.config > /dev/null
 
+chmod +x "$REPO_DIR/start-display.sh"
+
 # Deploy xorg service
 sudo cp "$REPO_DIR/xorg.service" /etc/systemd/system/xorg.service
 sudo systemctl daemon-reload
