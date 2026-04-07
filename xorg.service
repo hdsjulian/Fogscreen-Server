@@ -1,11 +1,14 @@
 [Unit]
 Description=Minimal X session
-After=network.target
+After=systemd-user-sessions.service
 
 [Service]
 User=raspi
+PAMName=login
 Environment=DISPLAY=:0
-ExecStart=/usr/bin/startx /usr/bin/feh --fullscreen --auto-zoom --borderless /home/raspi/black.png
+TTYPath=/dev/tty1
+StandardInput=tty
+ExecStart=/usr/bin/startx /usr/bin/feh --fullscreen --auto-zoom --borderless /home/raspi/black.png -- :0 vt1
 Restart=on-failure
 
 [Install]
