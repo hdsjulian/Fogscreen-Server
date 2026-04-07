@@ -11,7 +11,8 @@ WEB_DIR="/var/www/html"
 if [ ! -d "$REPO_DIR/.git" ]; then
     git clone https://github.com/hdsjulian/fogscreen-server "$REPO_DIR"
 else
-    git -C "$REPO_DIR" pull
+    git -C "$REPO_DIR" fetch origin
+    git -C "$REPO_DIR" reset --hard origin/main
 fi
 
 # Deploy HTML to nginx webroot
