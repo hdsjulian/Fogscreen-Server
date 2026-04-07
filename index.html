@@ -123,7 +123,7 @@
         function updateRelayButton(state) {
             const btn = document.getElementById('powerBtn');
             relayOn = state === 'on';
-            btn.textContent = relayOn ? 'Turn On' : 'Turn Off';
+            btn.textContent = relayOn ? 'Turn Off' : 'Turn On';
             btn.classList.toggle('on', relayOn);
         }
 

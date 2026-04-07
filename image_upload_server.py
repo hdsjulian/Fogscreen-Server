@@ -28,7 +28,7 @@ TIOCCBRK = 0x2000747A  # macOS
 
 import uvicorn
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 
@@ -280,6 +280,18 @@ async def relay_toggle():
     else:
         print("GPIO not available, skipping relay", flush=True)
     return JSONResponse(content={"relay": "on" if relay_state else "off"})
+
+
+
+# ── Captive portal detection endpoints ───────────────────────────────────────
+# Return 204 so iOS/Android mark the network as connected with no popup.
+
+@app.get("/hotspot-detect.html")
+@app.get("/library/test/success.html")
+@app.get("/ncsi.txt")
+@app.get("/generate_204")
+async def captive_portal_bypass():
+    return PlainTextResponse("", status_code=204)
 
 
 if __name__ == "__main__":

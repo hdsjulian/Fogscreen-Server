@@ -17,6 +17,10 @@ fi
 # Deploy HTML to nginx webroot
 sudo cp "$REPO_DIR/index.html" "$WEB_DIR/index.html"
 
+# Deploy nginx config
+sudo cp "$REPO_DIR/nginx.conf" /etc/nginx/sites-enabled/default
+sudo nginx -t && sudo systemctl reload nginx
+
 # Restart the FastAPI service
 sudo systemctl restart fogscreen
 
