@@ -22,6 +22,9 @@ sudo cp "$REPO_DIR/index.html" "$WEB_DIR/index.html"
 sudo cp "$REPO_DIR/nginx.conf" /etc/nginx/sites-enabled/default
 sudo nginx -t && sudo systemctl start nginx
 
+# Allow any user to run X
+echo -e "allowed_users=anybody\nneeds_root_rights=yes" | sudo tee /etc/X11/Xwrapper.config > /dev/null
+
 # Deploy xorg service
 sudo cp "$REPO_DIR/xorg.service" /etc/systemd/system/xorg.service
 sudo systemctl daemon-reload
