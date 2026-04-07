@@ -163,12 +163,12 @@ def _send_dmx(value: int, duration: float = 0.5) -> None:
 
 def fog_on() -> None:
     """Trigger the fog machine (non-blocking)."""
-    threading.Thread(target=_send_dmx, args=(FOG_ON_VALUE,), daemon=True).start()
+    threading.Thread(target=_send_dmx, args=(FOG_ON_VALUE, DISPLAY_DURATION), daemon=True).start()
 
 
 def fog_off() -> None:
     """Stop the fog machine (non-blocking)."""
-    threading.Thread(target=_send_dmx, args=(FOG_OFF_VALUE,), daemon=True).start()
+    threading.Thread(target=_send_dmx, args=(FOG_OFF_VALUE, 1.0), daemon=True).start()
 
 
 # ── Main display + fog sequence ───────────────────────────────────────────────
@@ -245,13 +245,13 @@ fog_state = False  # False = off, True = on
 
 
 @app.post("/fog/toggle")
-async def fog_toggle():
+async def fog_toggle(duration: int = 30):
     """Toggle the fog machine on or off."""
     global fog_state
     fog_state = not fog_state
     if fog_state:
-        fog_on()
-        print("Fog ON", flush=True)
+        threading.Thread(target=_send_dmx, args=(FOG_ON_VALUE, duration), daemon=True).start()
+        print(f"Fog ON for {duration}s", flush=True)
     else:
         fog_off()
         print("Fog OFF", flush=True)

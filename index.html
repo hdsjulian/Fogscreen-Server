@@ -72,6 +72,21 @@
             border-color: #4ade80;
             color: #4ade80;
         }
+        .upload-area {
+            margin-top: 1.5rem;
+            border: 1px dashed #333;
+            border-radius: 16px;
+            padding: 1.5rem;
+            cursor: pointer;
+            color: #aaa;
+            font-size: 0.95rem;
+            transition: border-color 0.2s;
+        }
+        .upload-area:hover { border-color: #fff; color: #fff; }
+        .upload-area.uploading { border-color: #facc15; color: #facc15; }
+        .upload-area.success { border-color: #4ade80; color: #4ade80; }
+        .upload-area.error { border-color: #f87171; color: #f87171; }
+        #fileInput { display: none; }
     </style>
 </head>
 <body>
@@ -92,8 +107,14 @@
         </div>
         <a class="app-button" href="#">Download on the App Store</a>
         <br>
+        <div class="upload-area" id="uploadArea" onclick="document.getElementById('fileInput').click()">
+            Tap to upload a photo
+        </div>
+        <input type="file" id="fileInput" accept="image/*" onchange="uploadFile(this)">
+        <br>
         <button class="power-button" id="powerBtn" onclick="toggleRelay()">Turn On</button>
         <button class="power-button" id="fogBtn" onclick="toggleFog()">Fog On</button>
+        <input type="number" id="fogDuration" value="30" min="1" style="margin-top:0.75rem;width:80px;padding:0.5rem;border-radius:8px;border:1px solid #333;background:#111;color:#fff;font-size:1rem;text-align:center;"> s
     </div>
     <script>
         let relayOn = false;
@@ -128,8 +149,37 @@
         }
 
         async function toggleFog() {
-            const res = await fetch('/fog/toggle', { method: 'POST' });
+            const duration = parseInt(document.getElementById('fogDuration').value) || 30;
+            const res = await fetch(`/fog/toggle?duration=${duration}`, { method: 'POST' });
             updateFogButton((await res.json()).fog);
+        }
+
+        async function uploadFile(input) {
+            const file = input.files[0];
+            if (!file) return;
+            const area = document.getElementById('uploadArea');
+            area.className = 'upload-area uploading';
+            area.textContent = 'Uploading...';
+            const form = new FormData();
+            form.append('file', file);
+            try {
+                const res = await fetch('/upload', { method: 'POST', body: form });
+                if (res.ok) {
+                    area.className = 'upload-area success';
+                    area.textContent = 'Uploaded! Displaying now.';
+                } else {
+                    area.className = 'upload-area error';
+                    area.textContent = `Error ${res.status}`;
+                }
+            } catch (e) {
+                area.className = 'upload-area error';
+                area.textContent = 'Upload failed.';
+            }
+            input.value = '';
+            setTimeout(() => {
+                area.className = 'upload-area';
+                area.textContent = 'Tap to upload a photo';
+            }, 3000);
         }
 
         fetchStatus();
