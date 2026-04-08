@@ -6,9 +6,9 @@ After=systemd-user-sessions.service
 User=raspi
 PAMName=login
 Environment=DISPLAY=:0
-TTYPath=/dev/tty1
+TTYPath=/dev/tty7
 StandardInput=tty
-ExecStart=/usr/bin/startx /home/raspi/fogscreen-server/start-display.sh -- :0 vt1
+ExecStart=/usr/bin/startx /home/raspi/fogscreen-server/start-display.sh -- :0 vt7
 Restart=on-failure
 
 [Install]
