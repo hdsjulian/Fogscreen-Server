@@ -64,7 +64,7 @@ DMX_BAUD = 250_000                   # DMX512 baud rate (do not change)
 
 # DMX channel layout for your fog machine.
 # Adjust channel numbers (1-based) and values to match your fixture's manual.
-FOG_DMX_CHANNEL = 248                # DMX channel that controls the fog output
+FOG_DMX_CHANNEL = 1                  # DMX channel that controls the fog output
 FOG_ON_VALUE    = 255                # 0-255 – full fog
 FOG_OFF_VALUE   = 0                  # 0     – fog off
 
