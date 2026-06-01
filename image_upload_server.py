@@ -32,10 +32,28 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 
+# ── Fan (PWM) configuration ───────────────────────────────────────────────────
+FAN1_PWM_PIN = 18      # GPIO 18 → array 1 PWM signal in (4-pin connector, pin 4)
+FAN2_PWM_PIN = 19      # GPIO 19 → array 2 PWM signal in (4-pin connector, pin 4)
+FAN_PWM_FREQ = 25_000  # 25 kHz – Intel 4-pin PWM spec (21–28 kHz acceptable range)
+# ──────────────────────────────────────────────────────────────────────────────
+
+fan1_pwm = None  # RPi.GPIO PWM objects, set during GPIO init
+fan2_pwm = None
+
 try:
     import RPi.GPIO as GPIO
     GPIO.setmode(GPIO.BCM)
     GPIO.setup(17, GPIO.OUT, initial=GPIO.LOW)
+    GPIO.setup(27, GPIO.OUT, initial=GPIO.LOW)
+    # Fan array 1 – GPIO 18
+    GPIO.setup(FAN1_PWM_PIN, GPIO.OUT)
+    fan1_pwm = GPIO.PWM(FAN1_PWM_PIN, FAN_PWM_FREQ)
+    fan1_pwm.start(0)
+    # Fan array 2 – GPIO 19
+    GPIO.setup(FAN2_PWM_PIN, GPIO.OUT)
+    fan2_pwm = GPIO.PWM(FAN2_PWM_PIN, FAN_PWM_FREQ)
+    fan2_pwm.start(0)
     GPIO_AVAILABLE = True
     print("GPIO initialized OK", flush=True)
 except Exception as e:
@@ -82,6 +100,11 @@ app.add_middleware(
 display_lock = threading.Lock()
 current_proc: subprocess.Popen | None = None
 relay_state = False  # False = off, True = on
+valve1_state = False
+valve2_state = False
+fan1_speed  = 0      # array 1 duty cycle 0–100 %
+fan2_speed  = 0      # array 2 duty cycle 0–100 %
+fog_level   = 70     # fog output percentage 0–100 (maps to DMX 0–255)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -162,13 +185,70 @@ def _send_dmx(value: int, duration: float = 0.5) -> None:
 
 
 def fog_on() -> None:
-    """Trigger the fog machine (non-blocking)."""
-    threading.Thread(target=_send_dmx, args=(FOG_ON_VALUE, DISPLAY_DURATION), daemon=True).start()
+    """Trigger the fog machine for the upload-display flow (non-blocking)."""
+    dmx_value = round(fog_level / 100 * 255)
+    threading.Thread(target=_send_dmx, args=(dmx_value, float(DISPLAY_DURATION)), daemon=True).start()
 
 
 def fog_off() -> None:
     """Stop the fog machine (non-blocking)."""
     threading.Thread(target=_send_dmx, args=(FOG_OFF_VALUE, 1.0), daemon=True).start()
+
+
+fog_stop_event = threading.Event()
+
+
+def _fog_sequence(duration: int, level_pct: int) -> None:
+    """
+    Stream DMX at level_pct% for duration seconds, run fans for duration+5s, then stop.
+    Responds to fog_stop_event for early cancellation.
+    """
+    global fog_state
+    fog_stop_event.clear()
+    dmx_value = round(level_pct / 100 * 255)
+
+    # Start both fan arrays at their configured speeds
+    if GPIO_AVAILABLE:
+        if fan1_pwm is not None: fan1_pwm.ChangeDutyCycle(fan1_speed)
+        if fan2_pwm is not None: fan2_pwm.ChangeDutyCycle(fan2_speed)
+        print(f"[Fan] ON at {fan1_speed}% / {fan2_speed}%", flush=True)
+
+    # Stream DMX for duration seconds (or until stopped early)
+    port = DMX_PORT or _find_dmx_port()
+    if port is None:
+        print("[DMX] No adapter found – skipping fog", flush=True)
+    else:
+        try:
+            with serial.Serial(port, baudrate=DMX_BAUD, stopbits=2, timeout=1) as ser:
+                end = time.time() + duration
+                while time.time() < end and not fog_stop_event.is_set():
+                    fcntl.ioctl(ser.fd, TIOCSBRK)
+                    time.sleep(0.001)
+                    fcntl.ioctl(ser.fd, TIOCCBRK)
+                    time.sleep(0.00002)
+                    ser.write(_build_dmx_frame(FOG_DMX_CHANNEL, dmx_value))
+                    ser.flush()
+                    time.sleep(0.023)
+                # Always send an off frame when done
+                ser.write(_build_dmx_frame(FOG_DMX_CHANNEL, FOG_OFF_VALUE))
+                ser.flush()
+        except serial.SerialException as exc:
+            print(f"[DMX] Serial error: {exc}", flush=True)
+
+    # Fan cool-down: 5 more seconds (skipped on early stop)
+    if not fog_stop_event.is_set():
+        cool_end = time.time() + 5
+        while time.time() < cool_end and not fog_stop_event.is_set():
+            time.sleep(0.05)
+
+    # Stop fans
+    if GPIO_AVAILABLE:
+        if fan1_pwm is not None: fan1_pwm.ChangeDutyCycle(0)
+        if fan2_pwm is not None: fan2_pwm.ChangeDutyCycle(0)
+        print("[Fan] OFF", flush=True)
+
+    fog_state = False
+    print("[Fog] Sequence complete", flush=True)
 
 
 # ── Main display + fog sequence ───────────────────────────────────────────────
@@ -245,22 +325,24 @@ fog_state = False  # False = off, True = on
 
 
 @app.post("/fog/toggle")
-async def fog_toggle(duration: int = 30):
-    """Toggle the fog machine on or off."""
-    global fog_state
-    fog_state = not fog_state
+async def fog_toggle(duration: int = 30, level: int = 70):
+    """Start a timed fog+fan sequence, or cancel one in progress."""
+    global fog_state, fog_level
     if fog_state:
-        threading.Thread(target=_send_dmx, args=(FOG_ON_VALUE, duration), daemon=True).start()
-        print(f"Fog ON for {duration}s", flush=True)
+        fog_stop_event.set()
+        fog_state = False
+        print("[Fog] Stopped early", flush=True)
     else:
-        fog_off()
-        print("Fog OFF", flush=True)
-    return JSONResponse(content={"fog": "on" if fog_state else "off"})
+        fog_state = True
+        fog_level = level
+        threading.Thread(target=_fog_sequence, args=(duration, level), daemon=True).start()
+        print(f"[Fog] Sequence started: {duration}s at {level}%", flush=True)
+    return JSONResponse(content={"fog": "on" if fog_state else "off", "fog_level": fog_level})
 
 
 @app.get("/fog/status")
 async def fog_status():
-    return JSONResponse(content={"fog": "on" if fog_state else "off"})
+    return JSONResponse(content={"fog": "on" if fog_state else "off", "fog_level": fog_level})
 
 
 @app.get("/relay/status")
@@ -281,6 +363,88 @@ async def relay_toggle():
         print("GPIO not available, skipping relay", flush=True)
     return JSONResponse(content={"relay": "on" if relay_state else "off"})
 
+
+
+# ── Solenoid valve control (GPIO 17 = valve 1, GPIO 27 = valve 2) ─────────────
+
+def _set_valve(pin: int, state: bool) -> None:
+    if GPIO_AVAILABLE:
+        GPIO.output(pin, GPIO.HIGH if state else GPIO.LOW)
+        print(f"[Valve] GPIO {pin} {'OPEN' if state else 'CLOSED'}", flush=True)
+
+
+@app.get("/valve/status")
+async def valve_status():
+    return JSONResponse(content={
+        "valve1": "open" if valve1_state else "closed",
+        "valve2": "open" if valve2_state else "closed",
+    })
+
+
+@app.post("/valve/1/toggle")
+async def valve1_toggle():
+    global valve1_state
+    valve1_state = not valve1_state
+    _set_valve(17, valve1_state)
+    return JSONResponse(content={"valve1": "open" if valve1_state else "closed"})
+
+
+@app.post("/valve/2/toggle")
+async def valve2_toggle():
+    global valve2_state
+    valve2_state = not valve2_state
+    _set_valve(27, valve2_state)
+    return JSONResponse(content={"valve2": "open" if valve2_state else "closed"})
+
+
+@app.post("/valve/both/toggle")
+async def valve_both_toggle():
+    global valve1_state, valve2_state
+    new_state = not (valve1_state and valve2_state)
+    valve1_state = new_state
+    valve2_state = new_state
+    _set_valve(17, new_state)
+    _set_valve(27, new_state)
+    return JSONResponse(content={
+        "valve1": "open" if valve1_state else "closed",
+        "valve2": "open" if valve2_state else "closed",
+    })
+
+
+# ── Fan speed control ────────────────────────────────────────────────────────
+
+def _set_fan_speed(array: int, speed_pct: int) -> None:
+    """Set PWM duty cycle for fan array 1 or 2 (0–100 %)."""
+    global fan1_speed, fan2_speed
+    speed_pct = max(0, min(100, speed_pct))
+    if array == 1:
+        fan1_speed = speed_pct
+        pwm = fan1_pwm
+    else:
+        fan2_speed = speed_pct
+        pwm = fan2_pwm
+    if GPIO_AVAILABLE and pwm is not None:
+        pwm.ChangeDutyCycle(speed_pct)
+        print(f"[Fan] Array {array} speed set to {speed_pct}%", flush=True)
+    else:
+        print(f"[Fan] GPIO not available – would set array {array} to {speed_pct}%", flush=True)
+
+
+@app.post("/fan/1/speed")
+async def set_fan1_speed(speed: int = 0):
+    _set_fan_speed(1, speed)
+    return JSONResponse(content={"fan1_speed": fan1_speed})
+
+
+@app.post("/fan/2/speed")
+async def set_fan2_speed(speed: int = 0):
+    _set_fan_speed(2, speed)
+    return JSONResponse(content={"fan2_speed": fan2_speed})
+
+
+@app.get("/fan/status")
+async def fan_status():
+    return JSONResponse(content={"fan1_speed": fan1_speed, "fan2_speed": fan2_speed})
 
 
 # ── Captive portal detection endpoints ───────────────────────────────────────
