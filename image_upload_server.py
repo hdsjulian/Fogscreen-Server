@@ -9,7 +9,7 @@ POST /upload  – multipart/form-data, field name: "file"
 
 While the image is displayed, a fog machine connected via USB-to-DMX is
 triggered at full output and then switched off when the display clears.
-Requires: pip install fastapi uvicorn pillow pyserial
+Requires: pip install fastapi uvicorn pillow pyserial rpi-hardware-pwm
 """
 
 import fcntl
@@ -32,33 +32,31 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 
-# ── Fan (PWM) configuration ───────────────────────────────────────────────────
-FAN1_PWM_PIN = 18      # GPIO 18 → array 1 PWM signal in (4-pin connector, pin 4)
-FAN2_PWM_PIN = 19      # GPIO 19 → array 2 PWM signal in (4-pin connector, pin 4)
+# ── Fan (hardware PWM) configuration ──────────────────────────────────────────
+# Two hardware-PWM channels (not bit-banged software PWM):
+#   channel 0 → GPIO 18 (physical pin 12) → fan array 1
+#   channel 1 → GPIO 19 (physical pin 35) → fan array 2
+# Requires `dtoverlay=pwm-2chan` in /boot/firmware/config.txt (set by setup.sh).
+FAN1_PWM_CHANNEL = 0
+FAN2_PWM_CHANNEL = 1
 FAN_PWM_FREQ = 25_000  # 25 kHz – Intel 4-pin PWM spec (21–28 kHz acceptable range)
 # ──────────────────────────────────────────────────────────────────────────────
 
-fan1_pwm = None  # RPi.GPIO PWM objects, set during GPIO init
+fan1_pwm = None  # HardwarePWM objects, set during init below
 fan2_pwm = None
 
 try:
-    import RPi.GPIO as GPIO
-    GPIO.setmode(GPIO.BCM)
-    GPIO.setup(17, GPIO.OUT, initial=GPIO.LOW)
-    GPIO.setup(27, GPIO.OUT, initial=GPIO.LOW)
-    # Fan array 1 – GPIO 18
-    GPIO.setup(FAN1_PWM_PIN, GPIO.OUT)
-    fan1_pwm = GPIO.PWM(FAN1_PWM_PIN, FAN_PWM_FREQ)
-    fan1_pwm.start(0)
-    # Fan array 2 – GPIO 19
-    GPIO.setup(FAN2_PWM_PIN, GPIO.OUT)
-    fan2_pwm = GPIO.PWM(FAN2_PWM_PIN, FAN_PWM_FREQ)
+    from rpi_hardware_pwm import HardwarePWM
+    # chip=0 covers the Pi Zero 2 W (and Pi 0–4). On a Pi 5 this would be chip=2.
+    fan1_pwm = HardwarePWM(pwm_channel=FAN1_PWM_CHANNEL, hz=FAN_PWM_FREQ, chip=0)
+    fan2_pwm = HardwarePWM(pwm_channel=FAN2_PWM_CHANNEL, hz=FAN_PWM_FREQ, chip=0)
+    fan1_pwm.start(0)  # duty cycle 0–100 %
     fan2_pwm.start(0)
-    GPIO_AVAILABLE = True
-    print("GPIO initialized OK", flush=True)
+    FAN_PWM_AVAILABLE = True
+    print("Hardware PWM initialized OK", flush=True)
 except Exception as e:
-    GPIO_AVAILABLE = False
-    print(f"GPIO NOT available: {e}", flush=True)
+    FAN_PWM_AVAILABLE = False
+    print(f"Hardware PWM NOT available: {e}", flush=True)
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 HOST = "0.0.0.0"
@@ -99,9 +97,6 @@ app.add_middleware(
 
 display_lock = threading.Lock()
 current_proc: subprocess.Popen | None = None
-relay_state = False  # False = off, True = on
-valve1_state = False
-valve2_state = False
 fan1_speed  = 0      # array 1 duty cycle 0–100 %
 fan2_speed  = 0      # array 2 duty cycle 0–100 %
 fog_level   = 70     # fog output percentage 0–100 (maps to DMX 0–255)
@@ -208,9 +203,9 @@ def _fog_sequence(duration: int, level_pct: int) -> None:
     dmx_value = round(level_pct / 100 * 255)
 
     # Start both fan arrays at their configured speeds
-    if GPIO_AVAILABLE:
-        if fan1_pwm is not None: fan1_pwm.ChangeDutyCycle(fan1_speed)
-        if fan2_pwm is not None: fan2_pwm.ChangeDutyCycle(fan2_speed)
+    if FAN_PWM_AVAILABLE:
+        if fan1_pwm is not None: fan1_pwm.change_duty_cycle(fan1_speed)
+        if fan2_pwm is not None: fan2_pwm.change_duty_cycle(fan2_speed)
         print(f"[Fan] ON at {fan1_speed}% / {fan2_speed}%", flush=True)
 
     # Stream DMX for duration seconds (or until stopped early)
@@ -242,9 +237,9 @@ def _fog_sequence(duration: int, level_pct: int) -> None:
             time.sleep(0.05)
 
     # Stop fans
-    if GPIO_AVAILABLE:
-        if fan1_pwm is not None: fan1_pwm.ChangeDutyCycle(0)
-        if fan2_pwm is not None: fan2_pwm.ChangeDutyCycle(0)
+    if FAN_PWM_AVAILABLE:
+        if fan1_pwm is not None: fan1_pwm.change_duty_cycle(0)
+        if fan2_pwm is not None: fan2_pwm.change_duty_cycle(0)
         print("[Fan] OFF", flush=True)
 
     fog_state = False
@@ -345,72 +340,6 @@ async def fog_status():
     return JSONResponse(content={"fog": "on" if fog_state else "off", "fog_level": fog_level})
 
 
-@app.get("/relay/status")
-async def relay_status():
-    """Return the current relay state."""
-    return JSONResponse(content={"relay": "on" if relay_state else "off"})
-
-
-@app.post("/relay/toggle")
-async def relay_toggle():
-    """Toggle the relay on GPIO 17."""
-    global relay_state
-    relay_state = not relay_state
-    if GPIO_AVAILABLE:
-        GPIO.output(17, GPIO.LOW if relay_state else GPIO.HIGH)
-        print(f"GPIO 17 set to {'LOW (on)' if relay_state else 'HIGH (off)'}", flush=True)
-    else:
-        print("GPIO not available, skipping relay", flush=True)
-    return JSONResponse(content={"relay": "on" if relay_state else "off"})
-
-
-
-# ── Solenoid valve control (GPIO 17 = valve 1, GPIO 27 = valve 2) ─────────────
-
-def _set_valve(pin: int, state: bool) -> None:
-    if GPIO_AVAILABLE:
-        GPIO.output(pin, GPIO.HIGH if state else GPIO.LOW)
-        print(f"[Valve] GPIO {pin} {'OPEN' if state else 'CLOSED'}", flush=True)
-
-
-@app.get("/valve/status")
-async def valve_status():
-    return JSONResponse(content={
-        "valve1": "open" if valve1_state else "closed",
-        "valve2": "open" if valve2_state else "closed",
-    })
-
-
-@app.post("/valve/1/toggle")
-async def valve1_toggle():
-    global valve1_state
-    valve1_state = not valve1_state
-    _set_valve(17, valve1_state)
-    return JSONResponse(content={"valve1": "open" if valve1_state else "closed"})
-
-
-@app.post("/valve/2/toggle")
-async def valve2_toggle():
-    global valve2_state
-    valve2_state = not valve2_state
-    _set_valve(27, valve2_state)
-    return JSONResponse(content={"valve2": "open" if valve2_state else "closed"})
-
-
-@app.post("/valve/both/toggle")
-async def valve_both_toggle():
-    global valve1_state, valve2_state
-    new_state = not (valve1_state and valve2_state)
-    valve1_state = new_state
-    valve2_state = new_state
-    _set_valve(17, new_state)
-    _set_valve(27, new_state)
-    return JSONResponse(content={
-        "valve1": "open" if valve1_state else "closed",
-        "valve2": "open" if valve2_state else "closed",
-    })
-
-
 # ── Fan speed control ────────────────────────────────────────────────────────
 
 def _set_fan_speed(array: int, speed_pct: int) -> None:
@@ -423,11 +352,11 @@ def _set_fan_speed(array: int, speed_pct: int) -> None:
     else:
         fan2_speed = speed_pct
         pwm = fan2_pwm
-    if GPIO_AVAILABLE and pwm is not None:
-        pwm.ChangeDutyCycle(speed_pct)
+    if FAN_PWM_AVAILABLE and pwm is not None:
+        pwm.change_duty_cycle(speed_pct)
         print(f"[Fan] Array {array} speed set to {speed_pct}%", flush=True)
     else:
-        print(f"[Fan] GPIO not available – would set array {array} to {speed_pct}%", flush=True)
+        print(f"[Fan] PWM not available – would set array {array} to {speed_pct}%", flush=True)
 
 
 @app.post("/fan/1/speed")

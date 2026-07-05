@@ -112,13 +112,7 @@
         </div>
         <input type="file" id="fileInput" accept="image/*" onchange="uploadFile(this)">
         <br>
-        <button class="power-button" id="powerBtn" onclick="toggleRelay()">Turn On</button>
         <button class="power-button" id="fogBtn" onclick="toggleFog()">Fog On</button>
-        <div style="display:flex;gap:0.75rem;margin-top:1.5rem;justify-content:center;flex-wrap:wrap;">
-            <button class="power-button" id="valve1Btn" onclick="toggleValve(1)" style="margin-top:0;">Valve 1</button>
-            <button class="power-button" id="valve2Btn" onclick="toggleValve(2)" style="margin-top:0;">Valve 2</button>
-            <button class="power-button" id="valveBothBtn" onclick="toggleValveBoth()" style="margin-top:0;">Both Valves</button>
-        </div>
         <div class="step" style="margin-top:1rem;flex-direction:column;align-items:stretch;gap:0.75rem;">
             <div style="display:flex;justify-content:space-between;align-items:center;">
                 <span style="font-weight:600;">Fog Time</span>
@@ -159,15 +153,7 @@
         </div>
     </div>
     <script>
-        let relayOn = false;
         let fogOn = false;
-
-        function updateRelayButton(state) {
-            const btn = document.getElementById('powerBtn');
-            relayOn = state === 'on';
-            btn.textContent = relayOn ? 'Turn Off' : 'Turn On';
-            btn.classList.toggle('on', relayOn);
-        }
 
         function updateFogButton(state) {
             const btn = document.getElementById('fogBtn');
@@ -176,20 +162,11 @@
             btn.classList.toggle('on', fogOn);
         }
 
-        function updateValveButton(id, state) {
-            const btn = document.getElementById(id);
-            const open = state === 'open';
-            btn.classList.toggle('on', open);
-        }
-
         async function fetchStatus() {
-            const [relayRes, fogRes, fanRes, valveRes] = await Promise.all([
-                fetch('/relay/status'),
+            const [fogRes, fanRes] = await Promise.all([
                 fetch('/fog/status'),
                 fetch('/fan/status'),
-                fetch('/valve/status'),
             ]);
-            updateRelayButton((await relayRes.json()).relay);
             const fogData = await fogRes.json();
             updateFogButton(fogData.fog);
             document.getElementById('fogLevelSlider').value = fogData.fog_level;
@@ -199,10 +176,6 @@
             document.getElementById('fan1Slider').value = fanData.fan1_speed;
             document.getElementById('fan2SpeedLabel').textContent = fanData.fan2_speed + '%';
             document.getElementById('fan2Slider').value = fanData.fan2_speed;
-            const valveData = await valveRes.json();
-            updateValveButton('valve1Btn', valveData.valve1);
-            updateValveButton('valve2Btn', valveData.valve2);
-            updateValveButton('valveBothBtn', valveData.valve1 === 'open' && valveData.valve2 === 'open' ? 'open' : 'closed');
         }
 
         async function setFanSpeed(array, speed) {
@@ -213,31 +186,11 @@
             document.getElementById(`${key}Slider`).value = data[`${key}_speed`];
         }
 
-        async function toggleRelay() {
-            const res = await fetch('/relay/toggle', { method: 'POST' });
-            updateRelayButton((await res.json()).relay);
-        }
-
         async function toggleFog() {
             const duration = parseInt(document.getElementById('fogTimeSlider').value) || 30;
             const level = parseInt(document.getElementById('fogLevelSlider').value) ?? 70;
             const res = await fetch(`/fog/toggle?duration=${duration}&level=${level}`, { method: 'POST' });
             updateFogButton((await res.json()).fog);
-        }
-
-        async function toggleValve(num) {
-            const res = await fetch(`/valve/${num}/toggle`, { method: 'POST' });
-            const data = await res.json();
-            updateValveButton(`valve${num}Btn`, data[`valve${num}`]);
-            updateValveButton('valveBothBtn', data.valve1 === 'open' && data.valve2 === 'open' ? 'open' : 'closed');
-        }
-
-        async function toggleValveBoth() {
-            const res = await fetch('/valve/both/toggle', { method: 'POST' });
-            const data = await res.json();
-            updateValveButton('valve1Btn', data.valve1);
-            updateValveButton('valve2Btn', data.valve2);
-            updateValveButton('valveBothBtn', data.valve1 === 'open' && data.valve2 === 'open' ? 'open' : 'closed');
         }
 
         async function uploadFile(input) {
