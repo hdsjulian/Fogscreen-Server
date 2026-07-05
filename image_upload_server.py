@@ -3,9 +3,15 @@
 Image upload server for Raspberry Pi Zero 2 W – built with FastAPI.
 
 POST /upload  – multipart/form-data, field name: "file"
+                optional field "device_time": the uploading device's clock,
+                ISO-8601 (e.g. 2026-07-05T22:45:08+02:00), recorded in the log
   200  → valid image  (displayed on projector for 30 s, then black screen)
   400  → missing / empty file field
+  409  → a picture is already on the fog screen (body includes retry_after)
   415  → file is not a valid image
+
+Accepted uploads are logged to ~/fogscreen_uploads.jsonl (filename, size,
+device time, server time). The image file itself is deleted after display.
 
 While the image is displayed, a fog machine connected via USB-to-DMX is
 triggered at full output and then switched off when the display clears.
@@ -14,6 +20,7 @@ Requires: pip install fastapi uvicorn pillow pyserial rpi-hardware-pwm
 
 import fcntl
 import io
+import json
 import os
 import serial
 import serial.tools.list_ports
@@ -21,13 +28,14 @@ import subprocess
 import tempfile
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 TIOCSBRK = 0x2000747B  # macOS
 TIOCCBRK = 0x2000747A  # macOS
 
 import uvicorn
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
@@ -97,6 +105,9 @@ app.add_middleware(
 
 display_lock = threading.Lock()
 current_proc: subprocess.Popen | None = None
+display_slot = threading.Lock()  # held for the whole display sequence — blocks new uploads
+display_until = 0.0              # epoch seconds when the current display ends
+UPLOAD_LOG_PATH = Path.home() / "fogscreen_uploads.jsonl"
 fan1_speed  = 0      # array 1 duty cycle 0–100 %
 fan2_speed  = 0      # array 2 duty cycle 0–100 %
 fog_level   = 70     # fog output percentage 0–100 (maps to DMX 0–255)
@@ -108,6 +119,26 @@ def create_black_image() -> None:
     """Generate a 1920×1080 black PNG used to blank the projector."""
     img = Image.new("RGB", (1920, 1080), (0, 0, 0))
     img.save(BLACK_IMAGE_PATH)
+
+
+def log_upload(filename: str, size_bytes: int, device_time: str | None) -> None:
+    """Append an upload record to the JSONL log.
+
+    device_time is the phone's clock (ISO-8601, sent by the app) — treat it as
+    authoritative: the Pi has no RTC and no NTP while in AP mode, so
+    server_time is only a plausibility cross-check.
+    """
+    entry = {
+        "filename": filename,
+        "size_bytes": size_bytes,
+        "device_time": device_time,
+        "server_time": datetime.now().astimezone().isoformat(timespec="seconds"),
+    }
+    try:
+        with open(UPLOAD_LOG_PATH, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except OSError as exc:
+        print(f"[Log] Could not write upload log: {exc}", flush=True)
 
 
 def is_valid_image(data: bytes, filename: str) -> bool:
@@ -275,14 +306,32 @@ def display_image_then_black(image_path: str) -> None:
         current_proc = _show(BLACK_IMAGE_PATH)
 
 
+def run_display_then_cleanup(image_path: str) -> None:
+    """Display the image, then erase it from disk (oblivion) and free the slot."""
+    try:
+        display_image_then_black(image_path)
+    finally:
+        try:
+            os.remove(image_path)
+        except OSError:
+            pass
+        display_slot.release()
+
+
 # ── FastAPI endpoint ──────────────────────────────────────────────────────────
 
 @app.post("/upload")
-async def upload(file: UploadFile = File(...)):
+async def upload(
+    file: UploadFile = File(...),
+    device_time: str | None = Form(None),
+):
     """
     Accept an image file upload, validate it, display it on the projector,
     and trigger the fog machine for the duration of the display.
+    Only one picture at a time: returns 409 while a display is in progress.
     """
+    global display_until
+
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file selected.")
 
@@ -297,18 +346,38 @@ async def upload(file: UploadFile = File(...)):
             content={"error": "Uploaded file is not a valid image."},
         )
 
-    # Save temporarily
-    ext = Path(file.filename).suffix.lower() or ".png"
-    tmp_path = os.path.join(UPLOAD_DIR, f"current_image{ext}")
-    with open(tmp_path, "wb") as f:
-        f.write(data)
+    # display_slot is released by run_display_then_cleanup once the sequence ends
+    if not display_slot.acquire(blocking=False):
+        retry_after = max(1, round(display_until - time.time()))
+        return JSONResponse(
+            status_code=409,
+            content={
+                "error": "A picture is currently on the fog screen.",
+                "retry_after": retry_after,
+            },
+            headers={"Retry-After": str(retry_after)},
+        )
 
-    # Display + fog in background (non-blocking – response returned immediately)
-    threading.Thread(
-        target=display_image_then_black,
-        args=(tmp_path,),
-        daemon=True,
-    ).start()
+    try:
+        display_until = time.time() + DISPLAY_DURATION
+
+        # Save temporarily — deleted again after the display sequence
+        ext = Path(file.filename).suffix.lower() or ".png"
+        tmp_path = os.path.join(UPLOAD_DIR, f"current_image{ext}")
+        with open(tmp_path, "wb") as f:
+            f.write(data)
+
+        log_upload(file.filename, len(data), device_time)
+
+        # Display + fog in background (non-blocking – response returned immediately)
+        threading.Thread(
+            target=run_display_then_cleanup,
+            args=(tmp_path,),
+            daemon=True,
+        ).start()
+    except Exception:
+        display_slot.release()
+        raise
 
     return JSONResponse(
         status_code=200,

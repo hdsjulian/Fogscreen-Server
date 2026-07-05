@@ -24,7 +24,7 @@ set -euo pipefail
 TARGET_USER="raspi"                       # owner of the service + files
 WIFI_COUNTRY="US"                         # regulatory domain — AP won't start without it
 
-AP_SSID="FogScreen"                       # the hotspot visitors connect to
+AP_SSID="The Temple of Digital Oblivion"  # the hotspot visitors connect to (must match fogNetworkSSID in the iOS app)
 AP_PASS=""                                # "" = open network; else >= 8 chars
 AP_IP="192.168.4.1"                       # Pi's address while in AP mode
 
