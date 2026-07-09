@@ -13,6 +13,15 @@
 # Pi always stays reachable over the air.
 set -u
 
+# A mode switch tears down the network this script may be running over (e.g. an
+# SSH session on the AP). When that connection drops, the shell sends SIGHUP,
+# which would otherwise kill us mid-switch — after the old network is down but
+# before the new one is up and dnsmasq/nginx are restarted — stranding the Pi.
+# Ignore SIGHUP so the switch always runs to completion; just reconnect on the
+# new network afterwards. (NetworkManager and systemd do the real work via their
+# daemons, so the short nmcli/systemctl calls complete regardless.)
+trap '' HUP
+
 PARAM="${1:-}"
 
 wlan_conn() {  # name of the active connection on wlan0, if any
