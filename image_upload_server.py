@@ -48,6 +48,12 @@ from PIL import Image
 FAN1_PWM_CHANNEL = 0
 FAN2_PWM_CHANNEL = 1
 FAN_PWM_FREQ = 25_000  # 25 kHz – Intel 4-pin PWM spec (21–28 kHz acceptable range)
+# Fan behaviour while an uploaded image is on the fog: the arrays run so the
+# fog wall actually forms a surface to project onto (an upload triggers fog
+# *and* fans — not fog alone). After the image clears they cool down, then
+# return to whatever speed the portal had them at (0 by default).
+FAN_DISPLAY_SPEED = 100   # duty cycle (0–100 %) both arrays run at during a showing
+FAN_COOLDOWN_SECS = 5     # keep fans running this long after the image clears
 # ──────────────────────────────────────────────────────────────────────────────
 
 fan1_pwm = None  # HardwarePWM objects, set during init below
@@ -277,13 +283,36 @@ def _fog_sequence(duration: int, level_pct: int) -> None:
     print("[Fog] Sequence complete", flush=True)
 
 
+# ── Fan helpers for the upload/display flow ───────────────────────────────────
+
+def _fans_run(pct: int) -> None:
+    """Run both fan arrays at pct% (does not change the portal-set fan speeds)."""
+    if not FAN_PWM_AVAILABLE:
+        print(f"[Fan] PWM not available – would run both arrays at {pct}%", flush=True)
+        return
+    if fan1_pwm is not None: fan1_pwm.change_duty_cycle(pct)
+    if fan2_pwm is not None: fan2_pwm.change_duty_cycle(pct)
+    print(f"[Fan] Both arrays at {pct}% for image display", flush=True)
+
+
+def _fans_restore() -> None:
+    """Return both arrays to their configured (portal-set) speeds — 0 by default."""
+    if not FAN_PWM_AVAILABLE:
+        return
+    if fan1_pwm is not None: fan1_pwm.change_duty_cycle(fan1_speed)
+    if fan2_pwm is not None: fan2_pwm.change_duty_cycle(fan2_speed)
+    print(f"[Fan] Restored to {fan1_speed}% / {fan2_speed}%", flush=True)
+
+
 # ── Main display + fog sequence ───────────────────────────────────────────────
 
 def display_image_then_black(image_path: str) -> None:
     """
     1. Kill any existing display.
-    2. Show *image_path* full-screen AND trigger the fog machine.
-    3. After DISPLAY_DURATION seconds, stop the fog and show a black screen.
+    2. Show *image_path* full-screen AND start the fans + fog machine, so the
+       fog wall forms a surface for the image.
+    3. After DISPLAY_DURATION seconds, stop the fog and show a black screen,
+       then let the fans cool down and return to their configured speed.
     """
     global current_proc
 
@@ -293,6 +322,7 @@ def display_image_then_black(image_path: str) -> None:
             current_proc.wait()
         current_proc = _show(image_path)
 
+    _fans_run(FAN_DISPLAY_SPEED)
     fog_on()
 
     time.sleep(DISPLAY_DURATION)
@@ -304,6 +334,11 @@ def display_image_then_black(image_path: str) -> None:
             current_proc.terminate()
             current_proc.wait()
         current_proc = _show(BLACK_IMAGE_PATH)
+
+    # Let the fog clear against moving air, then hand the fans back to whatever
+    # speed the portal had them at (0 = off, the default).
+    time.sleep(FAN_COOLDOWN_SECS)
+    _fans_restore()
 
 
 def run_display_then_cleanup(image_path: str) -> None:
@@ -359,7 +394,9 @@ async def upload(
         )
 
     try:
-        display_until = time.time() + DISPLAY_DURATION
+        # Slot stays held through the fan cool-down too, so reflect that in the
+        # retry-after the busy (409) response reports.
+        display_until = time.time() + DISPLAY_DURATION + FAN_COOLDOWN_SECS
 
         # Save temporarily — deleted again after the display sequence
         ext = Path(file.filename).suffix.lower() or ".png"
