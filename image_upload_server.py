@@ -18,7 +18,6 @@ triggered at full output and then switched off when the display clears.
 Requires: pip install fastapi uvicorn pillow pyserial rpi-hardware-pwm
 """
 
-import fcntl
 import io
 import json
 import os
@@ -30,9 +29,6 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-
-TIOCSBRK = 0x2000747B  # macOS
-TIOCCBRK = 0x2000747A  # macOS
 
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -195,6 +191,19 @@ def _build_dmx_frame(channel: int, value: int) -> bytes:
     return bytes(frame)
 
 
+def _dmx_break(ser) -> None:
+    """
+    Send the DMX512 BREAK + mark-after-break before a frame, using pyserial's
+    portable break control. (The old code used raw TIOCSBRK/TIOCCBRK ioctls with
+    macOS-only constants, which errored on the Pi and killed the DMX thread
+    before a single frame went out — so the fog never fired.)
+    """
+    ser.break_condition = True
+    time.sleep(0.001)      # BREAK — spec wants ≥ 88 µs; 1 ms is safely long
+    ser.break_condition = False
+    time.sleep(0.00002)    # mark-after-break
+
+
 def _send_dmx(value: int, duration: float = 0.5) -> None:
     """Send continuous DMX frames for `duration` seconds."""
     port = DMX_PORT or _find_dmx_port()
@@ -205,10 +214,7 @@ def _send_dmx(value: int, duration: float = 0.5) -> None:
         with serial.Serial(port, baudrate=DMX_BAUD, stopbits=2, timeout=1) as ser:
             end = time.time() + duration
             while time.time() < end:
-                fcntl.ioctl(ser.fd, TIOCSBRK)
-                time.sleep(0.001)
-                fcntl.ioctl(ser.fd, TIOCCBRK)
-                time.sleep(0.00002)
+                _dmx_break(ser)
                 ser.write(_build_dmx_frame(FOG_DMX_CHANNEL, value))
                 ser.flush()
                 time.sleep(0.023)
@@ -254,10 +260,7 @@ def _fog_sequence(duration: int, level_pct: int) -> None:
             with serial.Serial(port, baudrate=DMX_BAUD, stopbits=2, timeout=1) as ser:
                 end = time.time() + duration
                 while time.time() < end and not fog_stop_event.is_set():
-                    fcntl.ioctl(ser.fd, TIOCSBRK)
-                    time.sleep(0.001)
-                    fcntl.ioctl(ser.fd, TIOCCBRK)
-                    time.sleep(0.00002)
+                    _dmx_break(ser)
                     ser.write(_build_dmx_frame(FOG_DMX_CHANNEL, dmx_value))
                     ser.flush()
                     time.sleep(0.023)
