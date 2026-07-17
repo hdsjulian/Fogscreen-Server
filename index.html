@@ -133,6 +133,26 @@
         </div>
         <div class="step" style="margin-top:1.5rem;flex-direction:column;align-items:stretch;gap:0.75rem;">
             <div style="display:flex;justify-content:space-between;align-items:center;">
+                <span style="font-weight:600;">DMX test</span>
+                <span style="color:#888;font-size:0.85rem;">find the fog channel</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+                <span>Channel</span>
+                <select id="dmxChannel"
+                        style="background:#222;color:#fff;border:1px solid #444;border-radius:4px;padding:0.3rem 0.6rem;cursor:pointer;">
+                </select>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+                <span>Output</span>
+                <span id="dmxValueLabel" style="color:#fff;font-weight:700;min-width:3ch;text-align:right;">255</span>
+            </div>
+            <input type="range" id="dmxValueSlider" min="0" max="255" value="255"
+                   style="width:100%;accent-color:#f59e0b;cursor:pointer;"
+                   oninput="document.getElementById('dmxValueLabel').textContent=this.value">
+            <button class="power-button" style="margin-top:0.5rem;" onclick="sendDmxTest()">Send DMX (5s)</button>
+        </div>
+        <div class="step" style="margin-top:1.5rem;flex-direction:column;align-items:stretch;gap:0.75rem;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
                 <span style="font-weight:600;">Fan Array 1</span>
                 <span id="fan1SpeedLabel" style="color:#4ade80;font-weight:700;min-width:3ch;text-align:right;">0%</span>
             </div>
@@ -191,6 +211,23 @@
             const level = parseInt(document.getElementById('fogLevelSlider').value) ?? 70;
             const res = await fetch(`/fog/toggle?duration=${duration}&level=${level}`, { method: 'POST' });
             updateFogButton((await res.json()).fog);
+        }
+
+        // Populate the DMX channel dropdown (1–32 is plenty to find a fogger's channel).
+        (function fillDmxChannels() {
+            const sel = document.getElementById('dmxChannel');
+            for (let ch = 1; ch <= 32; ch++) {
+                const opt = document.createElement('option');
+                opt.value = ch;
+                opt.textContent = 'Ch ' + ch;
+                sel.appendChild(opt);
+            }
+        })();
+
+        async function sendDmxTest() {
+            const channel = parseInt(document.getElementById('dmxChannel').value) || 1;
+            const value = parseInt(document.getElementById('dmxValueSlider').value) ?? 255;
+            await fetch(`/dmx/test?channel=${channel}&value=${value}&duration=5`, { method: 'POST' });
         }
 
         async function uploadFile(input) {

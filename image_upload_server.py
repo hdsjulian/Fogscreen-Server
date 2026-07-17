@@ -204,8 +204,8 @@ def _dmx_break(ser) -> None:
     time.sleep(0.00002)    # mark-after-break
 
 
-def _send_dmx(value: int, duration: float = 0.5) -> None:
-    """Send continuous DMX frames for `duration` seconds."""
+def _send_dmx(value: int, duration: float = 0.5, channel: int = FOG_DMX_CHANNEL) -> None:
+    """Send continuous DMX frames (channel=value) for `duration` seconds."""
     port = DMX_PORT or _find_dmx_port()
     if port is None:
         print("[DMX] WARNING: No USB-DMX adapter found. Skipping fog control.", flush=True)
@@ -215,7 +215,7 @@ def _send_dmx(value: int, duration: float = 0.5) -> None:
             end = time.time() + duration
             while time.time() < end:
                 _dmx_break(ser)
-                ser.write(_build_dmx_frame(FOG_DMX_CHANNEL, value))
+                ser.write(_build_dmx_frame(channel, value))
                 ser.flush()
                 time.sleep(0.023)
     except serial.SerialException as exc:
@@ -447,6 +447,21 @@ async def fog_toggle(duration: int = 30, level: int = 70):
 @app.get("/fog/status")
 async def fog_status():
     return JSONResponse(content={"fog": "on" if fog_state else "off", "fog_level": fog_level})
+
+
+# ── DMX test (find the right channel/level for an unknown fixture) ─────────────
+
+@app.post("/dmx/test")
+async def dmx_test(channel: int = 1, value: int = 255, duration: float = 5.0):
+    """Hold a single DMX channel at a value for a few seconds — used from the
+    web panel's channel dropdown + output slider to discover what drives the
+    fog machine. value is 0–255 (raw DMX), not a percentage."""
+    channel = max(1, min(DMX_UNIVERSE_SIZE, channel))
+    value = max(0, min(255, value))
+    duration = max(0.1, min(60.0, duration))
+    threading.Thread(target=_send_dmx, args=(value, duration, channel), daemon=True).start()
+    print(f"[DMX] test: channel {channel} = {value} for {duration}s", flush=True)
+    return JSONResponse(content={"channel": channel, "value": value, "duration": duration})
 
 
 # ── Fan speed control ────────────────────────────────────────────────────────
