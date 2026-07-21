@@ -5,10 +5,19 @@ Image upload server for Raspberry Pi Zero 2 W – built with FastAPI.
 POST /upload  – multipart/form-data, field name: "file"
                 optional field "device_time": the uploading device's clock,
                 ISO-8601 (e.g. 2026-07-05T22:45:08+02:00), recorded in the log
-  200  → valid image  (displayed on projector for 30 s, then black screen)
+  200  → valid image. Fans + fog start immediately, building the fog wall
+         for `heatup_seconds` before the image is actually projected, which
+         is then shown for `dissolve_seconds` before going black. Both
+         durations are reported in the JSON body so the client's own
+         on-phone ritual (a "warming up" wait, then the fade) can track
+         what's actually happening at the installation.
   400  → missing / empty file field
   409  → a picture is already on the fog screen (body includes retry_after)
   415  → file is not a valid image
+
+GET/POST /display/settings – read or tune heatup_seconds / dissolve_seconds
+at runtime (also exposed as sliders in the captive-portal admin page),
+without a redeploy.
 
 Accepted uploads are logged to ~/fogscreen_uploads.jsonl (filename, size,
 device time, server time). The image file itself is deleted after display.
@@ -71,7 +80,11 @@ except Exception as e:
 # ── Configuration ─────────────────────────────────────────────────────────────
 HOST = "0.0.0.0"
 PORT = 5000
-DISPLAY_DURATION = 30          # seconds to show the image before going black
+# Mutable at runtime via /display/settings (and the admin page's sliders) —
+# same pattern as fog_level / fan{1,2}_speed below. Defaults only; an
+# installation operator tunes these on-site without a redeploy.
+HEATUP_SECONDS_DEFAULT = 5     # fans + fog run this long before the image is projected
+DISSOLVE_SECONDS_DEFAULT = 30  # how long the image is shown before going black
 DISPLAY_ENV = ":0"             # X display (usually :0 on the Pi desktop)
 UPLOAD_DIR = tempfile.mkdtemp()
 BLACK_IMAGE_PATH = os.path.join(UPLOAD_DIR, "_black.png")
@@ -113,6 +126,8 @@ UPLOAD_LOG_PATH = Path.home() / "fogscreen_uploads.jsonl"
 fan1_speed  = 0      # array 1 duty cycle 0–100 %
 fan2_speed  = 0      # array 2 duty cycle 0–100 %
 fog_level   = 70     # fog output percentage 0–100 (maps to DMX 0–255)
+heatup_seconds   = HEATUP_SECONDS_DEFAULT    # fog-wall build time before the image shows
+dissolve_seconds = DISSOLVE_SECONDS_DEFAULT  # how long the image is shown
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -222,10 +237,10 @@ def _send_dmx(value: int, duration: float = 0.5, channel: int = FOG_DMX_CHANNEL)
         print(f"[DMX] Serial error: {exc}", flush=True)
 
 
-def fog_on() -> None:
-    """Trigger the fog machine for the upload-display flow (non-blocking)."""
+def fog_on(duration: float) -> None:
+    """Trigger the fog machine for `duration` seconds (non-blocking)."""
     dmx_value = round(fog_level / 100 * 255)
-    threading.Thread(target=_send_dmx, args=(dmx_value, float(DISPLAY_DURATION)), daemon=True).start()
+    threading.Thread(target=_send_dmx, args=(dmx_value, duration), daemon=True).start()
 
 
 def fog_off() -> None:
@@ -309,13 +324,14 @@ def _fans_restore() -> None:
 
 # ── Main display + fog sequence ───────────────────────────────────────────────
 
-def display_image_then_black(image_path: str) -> None:
+def display_image_then_black(image_path: str, heatup: int, dissolve: int) -> None:
     """
-    1. Kill any existing display.
-    2. Show *image_path* full-screen AND start the fans + fog machine, so the
-       fog wall forms a surface for the image.
-    3. After DISPLAY_DURATION seconds, stop the fog and show a black screen,
-       then let the fans cool down and return to their configured speed.
+    1. Kill any existing display, show black while the fog wall builds.
+    2. Start fans + fog immediately — the wall needs `heatup` seconds to
+       form a surface before there's anything to project onto.
+    3. Show *image_path* full-screen for `dissolve` seconds.
+    4. Stop the fog, show a black screen, then let the fans cool down and
+       return to their configured speed.
     """
     global current_proc
 
@@ -323,12 +339,21 @@ def display_image_then_black(image_path: str) -> None:
         if current_proc and current_proc.poll() is None:
             current_proc.terminate()
             current_proc.wait()
-        current_proc = _show(image_path)
+        current_proc = _show(BLACK_IMAGE_PATH)
 
     _fans_run(FAN_DISPLAY_SPEED)
-    fog_on()
+    fog_on(float(heatup + dissolve))
 
-    time.sleep(DISPLAY_DURATION)
+    if heatup > 0:
+        time.sleep(heatup)
+
+    with display_lock:
+        if current_proc and current_proc.poll() is None:
+            current_proc.terminate()
+            current_proc.wait()
+        current_proc = _show(image_path)
+
+    time.sleep(dissolve)
 
     fog_off()
 
@@ -344,10 +369,10 @@ def display_image_then_black(image_path: str) -> None:
     _fans_restore()
 
 
-def run_display_then_cleanup(image_path: str) -> None:
+def run_display_then_cleanup(image_path: str, heatup: int, dissolve: int) -> None:
     """Display the image, then erase it from disk (oblivion) and free the slot."""
     try:
-        display_image_then_black(image_path)
+        display_image_then_black(image_path, heatup, dissolve)
     finally:
         try:
             os.remove(image_path)
@@ -397,9 +422,13 @@ async def upload(
         )
 
     try:
+        # Snapshot the current settings so a mid-sequence /display/settings
+        # change can't desync this upload's response from what actually runs.
+        heatup, dissolve = heatup_seconds, dissolve_seconds
+
         # Slot stays held through the fan cool-down too, so reflect that in the
         # retry-after the busy (409) response reports.
-        display_until = time.time() + DISPLAY_DURATION + FAN_COOLDOWN_SECS
+        display_until = time.time() + heatup + dissolve + FAN_COOLDOWN_SECS
 
         # Save temporarily — deleted again after the display sequence
         ext = Path(file.filename).suffix.lower() or ".png"
@@ -412,7 +441,7 @@ async def upload(
         # Display + fog in background (non-blocking – response returned immediately)
         threading.Thread(
             target=run_display_then_cleanup,
-            args=(tmp_path,),
+            args=(tmp_path, heatup, dissolve),
             daemon=True,
         ).start()
     except Exception:
@@ -421,7 +450,11 @@ async def upload(
 
     return JSONResponse(
         status_code=200,
-        content={"message": "Image received, display and fog machine activated."},
+        content={
+            "message": "Image received, display and fog machine activated.",
+            "heatup_seconds": heatup,
+            "dissolve_seconds": dissolve,
+        },
     )
 
 
@@ -498,6 +531,24 @@ async def set_fan2_speed(speed: int = 0):
 @app.get("/fan/status")
 async def fan_status():
     return JSONResponse(content={"fan1_speed": fan1_speed, "fan2_speed": fan2_speed})
+
+
+# ── Display timing (heat-up + dissolve) ───────────────────────────────────────
+
+@app.get("/display/settings")
+async def get_display_settings():
+    return JSONResponse(content={"heatup_seconds": heatup_seconds, "dissolve_seconds": dissolve_seconds})
+
+
+@app.post("/display/settings")
+async def set_display_settings(heatup: int | None = None, dissolve: int | None = None):
+    """Tune the per-upload timing at runtime — no redeploy needed on-site."""
+    global heatup_seconds, dissolve_seconds
+    if heatup is not None:
+        heatup_seconds = max(0, min(60, heatup))
+    if dissolve is not None:
+        dissolve_seconds = max(5, min(120, dissolve))
+    return JSONResponse(content={"heatup_seconds": heatup_seconds, "dissolve_seconds": dissolve_seconds})
 
 
 # ── Captive portal detection endpoints ───────────────────────────────────────

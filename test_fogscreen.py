@@ -173,7 +173,16 @@ def main():
     )
     code, resp = http("POST", f"{base}/upload", data=body_bytes, headers={"Content-Type": ctype})
     record("upload valid image → 200", code == 200, f"HTTP {code}")
-    confirm("Did the magenta image appear on the projector, with fans + fog?")
+    try:
+        timing = json.loads(resp)
+        heatup = timing.get("heatup_seconds", 5)
+        dissolve = timing.get("dissolve_seconds", 30)
+        record("upload response reports heatup/dissolve seconds",
+               "heatup_seconds" in timing and "dissolve_seconds" in timing, resp)
+    except Exception:
+        heatup, dissolve = 5, 30
+    print(f"  {DIM}fans + fog should start now; the image appears after a {heatup}s heat-up…{RESET}")
+    confirm("Did fans + fog start immediately, then the magenta image appear after the heat-up?")
 
     # 6. Rejection paths (while the display from #5 is still busy) ---------------
     section("6. Rejection paths")
@@ -206,8 +215,10 @@ def main():
 
     # 7. Let the display finish so we leave the server idle ----------------------
     section("7. Cooldown")
-    print(f"  {DIM}waiting ~35s for the display + fan cool-down to finish…{RESET}")
-    time.sleep(36)
+    fan_cooldown = 5  # FAN_COOLDOWN_SECS in image_upload_server.py
+    wait_s = heatup + dissolve + fan_cooldown + 3  # + buffer
+    print(f"  {DIM}waiting ~{wait_s}s for the heat-up + dissolve + fan cool-down to finish…{RESET}")
+    time.sleep(wait_s)
     confirm("Has the projector gone black and the fans stopped?")
     print(f"\n  {DIM}On the Pi, confirm the log grew and the image was deleted:{RESET}")
     print(f"  {DIM}  tail -n 3 ~/fogscreen_uploads.jsonl{RESET}")
